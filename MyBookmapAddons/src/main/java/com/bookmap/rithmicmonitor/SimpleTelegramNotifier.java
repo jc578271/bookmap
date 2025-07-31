@@ -19,6 +19,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.Properties;
 
 @Layer1Attachable
 @Layer1StrategyName("Simple Telegram Notifier")
@@ -49,10 +54,13 @@ public class SimpleTelegramNotifier implements
     private JTextField timeoutField;
     private JTextField periodicField;
     private JLabel statusLabel;
+    private final File configFile;
     
     public SimpleTelegramNotifier(Layer1ApiProvider provider) {
         this.provider = provider;
+        this.configFile = new File(System.getProperty("user.home"), "SimpleTelegramNotifier.properties");
         ListenableHelper.addListeners(provider, this);
+        loadConfig(); // Load saved configuration on startup
     }
     
     @Override
@@ -210,6 +218,7 @@ public class SimpleTelegramNotifier implements
         gbc.gridx = 1; gbc.gridy = 0;
         gbc.weightx = 1.0;
         botTokenField = new JTextField(15);
+        botTokenField.setText(botToken); // Set saved value
         panel.add(botTokenField, gbc);
         
         // Chat ID
@@ -220,6 +229,7 @@ public class SimpleTelegramNotifier implements
         gbc.gridx = 1; gbc.gridy = 1;
         gbc.weightx = 1.0;
         chatIdField = new JTextField(15);
+        chatIdField.setText(chatId); // Set saved value
         panel.add(chatIdField, gbc);
         
         // Timeout
@@ -239,7 +249,7 @@ public class SimpleTelegramNotifier implements
         
         gbc.gridx = 1; gbc.gridy = 3;
         gbc.weightx = 1.0;
-        periodicField = new JTextField("0", 8);
+        periodicField = new JTextField(String.valueOf(periodicSeconds), 8);
         panel.add(periodicField, gbc);
         
         // Status Display
@@ -250,6 +260,9 @@ public class SimpleTelegramNotifier implements
         statusLabel.setForeground(Color.RED);
         statusLabel.setFont(new Font("Arial", Font.BOLD, 12));
         panel.add(statusLabel, gbc);
+        
+        // Update status display with current state
+        updateStatus();
         
         // Buttons in Column
         JPanel buttonPanel = new JPanel(new GridLayout(0, 1, 5, 5));
@@ -332,10 +345,67 @@ public class SimpleTelegramNotifier implements
             periodicSeconds = 0;
             periodicField.setText("0");
         }
+        
+        // Save to file
+        saveConfigToFile();
+        
         System.out.println("Config saved - Bot: " + botToken.substring(0, Math.min(10, botToken.length())) + "...");
         System.out.println("Chat ID: " + chatId);
         System.out.println("Timeout: " + timeoutSeconds + " seconds");
         System.out.println("Periodic: " + periodicSeconds + " seconds");
+    }
+    
+    private void saveConfigToFile() {
+        try {
+            Properties props = new Properties();
+            props.setProperty("botToken", botToken);
+            props.setProperty("chatId", chatId);
+            props.setProperty("timeoutSeconds", String.valueOf(timeoutSeconds));
+            props.setProperty("periodicSeconds", String.valueOf(periodicSeconds));
+            
+            try (FileWriter writer = new FileWriter(configFile)) {
+                props.store(writer, "Simple Telegram Notifier Configuration");
+            }
+            System.out.println("✅ Configuration saved to: " + configFile.getAbsolutePath());
+        } catch (IOException e) {
+            System.err.println("❌ Error saving configuration: " + e.getMessage());
+        }
+    }
+    
+    private void loadConfig() {
+        if (!configFile.exists()) {
+            System.out.println("No saved configuration found");
+            return;
+        }
+        
+        try {
+            Properties props = new Properties();
+            try (FileReader reader = new FileReader(configFile)) {
+                props.load(reader);
+            }
+            
+            botToken = props.getProperty("botToken", "");
+            chatId = props.getProperty("chatId", "");
+            timeoutSeconds = Integer.parseInt(props.getProperty("timeoutSeconds", "30"));
+            periodicSeconds = Integer.parseInt(props.getProperty("periodicSeconds", "0"));
+            
+            // Update UI fields if they exist
+            if (botTokenField != null) botTokenField.setText(botToken);
+            if (chatIdField != null) chatIdField.setText(chatId);
+            if (timeoutField != null) timeoutField.setText(String.valueOf(timeoutSeconds));
+            if (periodicField != null) periodicField.setText(String.valueOf(periodicSeconds));
+            
+            System.out.println("✅ Configuration loaded from: " + configFile.getAbsolutePath());
+            System.out.println("Bot: " + botToken.substring(0, Math.min(10, botToken.length())) + "...");
+            System.out.println("Chat ID: " + chatId);
+            System.out.println("Timeout: " + timeoutSeconds + " seconds");
+            System.out.println("Periodic: " + periodicSeconds + " seconds");
+            
+            // Update status display if UI is already created
+            updateStatus();
+        } catch (IOException | NumberFormatException e) {
+            System.err.println("❌ Error loading configuration: " + e.getMessage());
+        }
     }
     
     public void testTelegram() {
