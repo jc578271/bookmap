@@ -88,6 +88,13 @@ public class SimpleTelegramNotifier implements
             isInTimeoutState = false;
             isPeriodicScheduled = false;
             timeoutStartTime = 0;
+            
+            // Cancel periodic task if it's running
+            if (periodicTask != null && !periodicTask.isCancelled()) {
+                periodicTask.cancel(false);
+                periodicTask = null;
+            }
+            
             System.out.println("✅ Data received - timeout state reset");
         }
     }
@@ -200,7 +207,14 @@ public class SimpleTelegramNotifier implements
             // Data has returned, stop periodic alerts
             System.out.println("✅ Data returned, stopping periodic alerts");
             isInTimeoutState = false;
+            isPeriodicScheduled = false;
             timeoutStartTime = 0;
+            
+            // Cancel periodic task
+            if (periodicTask != null && !periodicTask.isCancelled()) {
+                periodicTask.cancel(false);
+                periodicTask = null;
+            }
         }
     }
     
