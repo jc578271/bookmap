@@ -24,6 +24,14 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.Properties;
+import java.time.LocalTime;
+import java.time.DayOfWeek;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 @Layer1Attachable
 @Layer1StrategyName("Simple Telegram Notifier")
@@ -49,11 +57,27 @@ public class SimpleTelegramNotifier implements
     private java.util.concurrent.ScheduledFuture<?> timeoutTask;
     private java.util.concurrent.ScheduledFuture<?> periodicTask;
     
+    // Time range configuration
+    private String startTime = "09:00";
+    private String endTime = "17:00";
+    private Set<DayOfWeek> activeDays = new HashSet<>(Arrays.asList(
+        DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, 
+        DayOfWeek.THURSDAY, DayOfWeek.FRIDAY
+    ));
+    private boolean timeRangeEnabled = false;
+    private boolean isInTimeRange = false;
+    private java.util.concurrent.ScheduledFuture<?> timeRangeTask;
+    
     private JTextField botTokenField;
     private JTextField chatIdField;
     private JTextField timeoutField;
     private JTextField periodicField;
+    private JTextField startTimeField;
+    private JTextField endTimeField;
+    private JCheckBox timeRangeEnabledCheckBox;
+    private JCheckBox[] dayCheckBoxes;
     private JLabel statusLabel;
+    private JLabel timeRangeStatusLabel;
     private final File configFile;
     
     public SimpleTelegramNotifier(Layer1ApiProvider provider) {
@@ -61,6 +85,7 @@ public class SimpleTelegramNotifier implements
         this.configFile = new File(System.getProperty("user.home"), "SimpleTelegramNotifier.properties");
         ListenableHelper.addListeners(provider, this);
         loadConfig(); // Load saved configuration on startup
+        startTimeRangeMonitoring(); // Start time range monitoring
     }
     
     @Override
@@ -75,6 +100,8 @@ public class SimpleTelegramNotifier implements
                 System.out.println("To send message: sendMessage(\"your message\")");
                 System.out.println("To start monitoring: startMonitoring()");
                 System.out.println("To stop monitoring: stopMonitoring()");
+                System.out.println("To check time range status: getTimeRangeStatus()");
+                System.out.println("To check if time range is active: isTimeRangeActive()");
                 System.out.println("=========================================");
             }
         }
@@ -157,8 +184,119 @@ public class SimpleTelegramNotifier implements
         }
     }
     
+    private void updateTimeRangeStatus() {
+        if (timeRangeStatusLabel != null) {
+            SwingUtilities.invokeLater(() -> {
+                if (!timeRangeEnabled) {
+                    timeRangeStatusLabel.setText("Time Range Status: Not Active");
+                    timeRangeStatusLabel.setForeground(Color.GRAY);
+                } else if (isInTimeRange) {
+                    timeRangeStatusLabel.setText("Time Range Status: IN RANGE");
+                    timeRangeStatusLabel.setForeground(Color.GREEN);
+                } else {
+                    timeRangeStatusLabel.setText("Time Range Status: OUT OF RANGE");
+                    timeRangeStatusLabel.setForeground(Color.RED);
+                }
+            });
+        }
+    }
+    
+    private void startTimeRangeMonitoring() {
+        // Check time range every minute
+        timeRangeTask = scheduler.scheduleAtFixedRate(this::checkTimeRange, 0, 1, TimeUnit.MINUTES);
+    }
+    
+    private void checkTimeRange() {
+        if (!timeRangeEnabled) {
+            isInTimeRange = false;
+            updateTimeRangeStatus();
+            return;
+        }
+        
+        LocalDateTime now = LocalDateTime.now();
+        DayOfWeek currentDay = now.getDayOfWeek();
+        LocalTime currentTime = now.toLocalTime();
+        
+        // Check if current day is active
+        if (!activeDays.contains(currentDay)) {
+            isInTimeRange = false;
+            updateTimeRangeStatus();
+            return;
+        }
+        
+        // Parse start and end times
+        try {
+            LocalTime start = LocalTime.parse(startTime, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalTime end = LocalTime.parse(endTime, DateTimeFormatter.ofPattern("HH:mm"));
+            
+            boolean wasInRange = isInTimeRange;
+            isInTimeRange = !currentTime.isBefore(start) && !currentTime.isAfter(end);
+            
+            // Update status if it changed
+            if (wasInRange != isInTimeRange) {
+                updateTimeRangeStatus();
+                if (isInTimeRange) {
+                    System.out.println("✅ Entered time range: " + startTime + " - " + endTime + " on " + currentDay);
+                } else {
+                    System.out.println("❌ Exited time range: " + startTime + " - " + endTime + " on " + currentDay);
+                }
+            }
+        } catch (DateTimeParseException e) {
+            System.err.println("❌ Invalid time format: " + e.getMessage());
+            isInTimeRange = false;
+            updateTimeRangeStatus();
+        }
+    }
+    
+    private boolean isWithinTimeRange() {
+        if (!timeRangeEnabled) {
+            return true; // If time range is disabled, always consider it "within range"
+        }
+        return isInTimeRange;
+    }
+    
+    private boolean isValidTimeFormat(String time) {
+        try {
+            LocalTime.parse(time, DateTimeFormatter.ofPattern("HH:mm"));
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+    
+    private void updateStartTime() {
+        String newTime = startTimeField.getText().trim();
+        if (isValidTimeFormat(newTime)) {
+            startTime = newTime;
+            checkTimeRange();
+            updateTimeRangeStatus();
+        } else {
+            startTimeField.setText(startTime); // Revert to previous valid value
+            JOptionPane.showMessageDialog(null, "Invalid time format. Please use HH:mm (e.g., 09:30)", 
+                "Invalid Time Format", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private void updateEndTime() {
+        String newTime = endTimeField.getText().trim();
+        if (isValidTimeFormat(newTime)) {
+            endTime = newTime;
+            checkTimeRange();
+            updateTimeRangeStatus();
+        } else {
+            endTimeField.setText(endTime); // Revert to previous valid value
+            JOptionPane.showMessageDialog(null, "Invalid time format. Please use HH:mm (e.g., 17:30)", 
+                "Invalid Time Format", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
     private void checkDataTimeout() {
         if (!isMonitoring) return;
+        
+        // Check if we're within the configured time range
+        if (!isWithinTimeRange()) {
+            return; // Don't send alerts outside of time range
+        }
         
         long currentTime = System.currentTimeMillis();
         long timeoutMs = timeoutSeconds * 1000L;
@@ -188,6 +326,11 @@ public class SimpleTelegramNotifier implements
     private void sendPeriodicTimeoutAlert() {
         if (!isMonitoring || !isInTimeoutState) {
             return;
+        }
+        
+        // Check if we're within the configured time range
+        if (!isWithinTimeRange()) {
+            return; // Don't send alerts outside of time range
         }
         
         long currentTime = System.currentTimeMillis();
@@ -266,8 +409,106 @@ public class SimpleTelegramNotifier implements
         periodicField = new JTextField(String.valueOf(periodicSeconds), 8);
         panel.add(periodicField, gbc);
         
-        // Status Display
+        // Time Range
         gbc.gridx = 0; gbc.gridy = 4;
+        gbc.weightx = 0.0;
+        panel.add(new JLabel("Time Range:"), gbc);
+        
+        gbc.gridx = 1; gbc.gridy = 4;
+        gbc.weightx = 1.0;
+        timeRangeEnabledCheckBox = new JCheckBox("Enable Time Range Monitoring");
+        timeRangeEnabledCheckBox.setSelected(timeRangeEnabled);
+        timeRangeEnabledCheckBox.addActionListener(e -> {
+            timeRangeEnabled = timeRangeEnabledCheckBox.isSelected();
+            checkTimeRange();
+            updateTimeRangeStatus();
+        });
+        panel.add(timeRangeEnabledCheckBox, gbc);
+        
+        // Start Time
+        gbc.gridx = 0; gbc.gridy = 5;
+        gbc.gridwidth = 1;
+        gbc.weightx = 0.0;
+        panel.add(new JLabel("Start Time (HH:mm):"), gbc);
+        
+        gbc.gridx = 1; gbc.gridy = 5;
+        gbc.gridwidth = 1;
+        gbc.weightx = 1.0;
+        startTimeField = new JTextField(startTime, 8);
+        startTimeField.setToolTipText("Enter time in HH:mm format (e.g., 09:30)");
+        startTimeField.addActionListener(e -> {
+            updateStartTime();
+        });
+        startTimeField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                updateStartTime();
+            }
+        });
+        panel.add(startTimeField, gbc);
+        
+        // End Time
+        gbc.gridx = 0; gbc.gridy = 6;
+        gbc.gridwidth = 1;
+        gbc.weightx = 0.0;
+        panel.add(new JLabel("End Time (HH:mm):"), gbc);
+        
+        gbc.gridx = 1; gbc.gridy = 6;
+        gbc.gridwidth = 1;
+        gbc.weightx = 1.0;
+        endTimeField = new JTextField(endTime, 8);
+        endTimeField.setToolTipText("Enter time in HH:mm format (e.g., 17:30)");
+        endTimeField.addActionListener(e -> {
+            updateEndTime();
+        });
+        endTimeField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                updateEndTime();
+            }
+        });
+        panel.add(endTimeField, gbc);
+        
+        gbc.gridx = 0; gbc.gridy = 7;
+        gbc.gridwidth = 2;
+        gbc.weightx = 0.0;
+        panel.add(new JLabel("Active Days:"), gbc);
+        
+        // Create a panel for day checkboxes with 2 columns
+        JPanel daysPanel = new JPanel(new GridLayout(0, 2, 5, 2));
+        daysPanel.setBorder(BorderFactory.createEmptyBorder(2, 10, 2, 10));
+        
+        dayCheckBoxes = new JCheckBox[7];
+        dayCheckBoxes[0] = new JCheckBox("Monday");
+        dayCheckBoxes[1] = new JCheckBox("Tuesday");
+        dayCheckBoxes[2] = new JCheckBox("Wednesday");
+        dayCheckBoxes[3] = new JCheckBox("Thursday");
+        dayCheckBoxes[4] = new JCheckBox("Friday");
+        dayCheckBoxes[5] = new JCheckBox("Saturday");
+        dayCheckBoxes[6] = new JCheckBox("Sunday");
+        
+        for (int i = 0; i < dayCheckBoxes.length; i++) {
+            final int dayIndex = i;
+            dayCheckBoxes[i].setSelected(activeDays.contains(DayOfWeek.of(i + 1)));
+            dayCheckBoxes[i].addActionListener(e -> {
+                if (dayCheckBoxes[dayIndex].isSelected()) {
+                    activeDays.add(DayOfWeek.of(dayIndex + 1));
+                } else {
+                    activeDays.remove(DayOfWeek.of(dayIndex + 1));
+                }
+                checkTimeRange();
+                updateTimeRangeStatus();
+            });
+            daysPanel.add(dayCheckBoxes[i]);
+        }
+        
+        gbc.gridx = 0; gbc.gridy = 8;
+        gbc.gridwidth = 2;
+        gbc.weightx = 0.0;
+        panel.add(daysPanel, gbc);
+        
+        // Status Display
+        gbc.gridx = 0; gbc.gridy = 9;
         gbc.gridwidth = 2;
         gbc.weightx = 0.0;
         statusLabel = new JLabel("Status: Not Monitoring", SwingConstants.CENTER);
@@ -275,8 +516,21 @@ public class SimpleTelegramNotifier implements
         statusLabel.setFont(new Font("Arial", Font.BOLD, 12));
         panel.add(statusLabel, gbc);
         
+        // Time Range Status Display
+        gbc.gridx = 0; gbc.gridy = 10;
+        gbc.gridwidth = 2;
+        gbc.weightx = 0.0;
+        timeRangeStatusLabel = new JLabel("Time Range Status: Not Active", SwingConstants.CENTER);
+        timeRangeStatusLabel.setForeground(Color.GRAY);
+        timeRangeStatusLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        panel.add(timeRangeStatusLabel, gbc);
+        
         // Update status display with current state
         updateStatus();
+        
+        // Force a time range check and update status when UI is created
+        checkTimeRange();
+        updateTimeRangeStatus();
         
         // Buttons in Column
         JPanel buttonPanel = new JPanel(new GridLayout(0, 1, 5, 5));
@@ -313,7 +567,7 @@ public class SimpleTelegramNotifier implements
         });
         buttonPanel.add(stopButton);
         
-        gbc.gridx = 0; gbc.gridy = 5;
+        gbc.gridx = 0; gbc.gridy = 11;
         gbc.gridwidth = 2;
         gbc.weightx = 0.0;
         panel.add(buttonPanel, gbc);
@@ -360,13 +614,44 @@ public class SimpleTelegramNotifier implements
             periodicField.setText("0");
         }
         
+        // Save time range settings
+        timeRangeEnabled = timeRangeEnabledCheckBox.isSelected();
+        startTime = startTimeField.getText().trim();
+        endTime = endTimeField.getText().trim();
+        
+        // Validate time format
+        try {
+            LocalTime.parse(startTime, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalTime.parse(endTime, DateTimeFormatter.ofPattern("HH:mm"));
+        } catch (DateTimeParseException ex) {
+            startTime = "09:00";
+            endTime = "17:00";
+            startTimeField.setText(startTime);
+            endTimeField.setText(endTime);
+            System.out.println("⚠️ Invalid time format, reset to default: " + startTime + " - " + endTime);
+        }
+        
+        // Save active days
+        activeDays.clear();
+        for (int i = 0; i < dayCheckBoxes.length; i++) {
+            if (dayCheckBoxes[i].isSelected()) {
+                activeDays.add(DayOfWeek.of(i + 1));
+            }
+        }
+        
         // Save to file
         saveConfigToFile();
+        
+        // Update time range status immediately
+        checkTimeRange();
         
         System.out.println("Config saved - Bot: " + botToken.substring(0, Math.min(10, botToken.length())) + "...");
         System.out.println("Chat ID: " + chatId);
         System.out.println("Timeout: " + timeoutSeconds + " seconds");
         System.out.println("Periodic: " + periodicSeconds + " seconds");
+        System.out.println("Time Range: " + (timeRangeEnabled ? "Enabled" : "Disabled") + 
+                          (timeRangeEnabled ? " (" + startTime + " - " + endTime + ")" : ""));
+        System.out.println("Active Days: " + activeDays);
     }
     
     private void saveConfigToFile() {
@@ -376,6 +661,12 @@ public class SimpleTelegramNotifier implements
             props.setProperty("chatId", chatId);
             props.setProperty("timeoutSeconds", String.valueOf(timeoutSeconds));
             props.setProperty("periodicSeconds", String.valueOf(periodicSeconds));
+            props.setProperty("timeRangeEnabled", String.valueOf(timeRangeEnabled));
+            props.setProperty("startTime", startTime);
+            props.setProperty("endTime", endTime);
+            props.setProperty("activeDays", String.join(",", activeDays.stream()
+                .map(day -> String.valueOf(day.getValue()))
+                .toArray(String[]::new)));
             
             try (FileWriter writer = new FileWriter(configFile)) {
                 props.store(writer, "Simple Telegram Notifier Configuration");
@@ -403,20 +694,51 @@ public class SimpleTelegramNotifier implements
             timeoutSeconds = Integer.parseInt(props.getProperty("timeoutSeconds", "30"));
             periodicSeconds = Integer.parseInt(props.getProperty("periodicSeconds", "0"));
             
+            // Load time range settings
+            timeRangeEnabled = Boolean.parseBoolean(props.getProperty("timeRangeEnabled", "false"));
+            startTime = props.getProperty("startTime", "09:00");
+            endTime = props.getProperty("endTime", "17:00");
+            
+            // Load active days
+            String activeDaysStr = props.getProperty("activeDays", "1,2,3,4,5"); // Monday-Friday by default
+            activeDays.clear();
+            for (String dayStr : activeDaysStr.split(",")) {
+                try {
+                    int dayValue = Integer.parseInt(dayStr.trim());
+                    if (dayValue >= 1 && dayValue <= 7) {
+                        activeDays.add(DayOfWeek.of(dayValue));
+                    }
+                } catch (NumberFormatException e) {
+                    // Skip invalid day values
+                }
+            }
+            
             // Update UI fields if they exist
             if (botTokenField != null) botTokenField.setText(botToken);
             if (chatIdField != null) chatIdField.setText(chatId);
             if (timeoutField != null) timeoutField.setText(String.valueOf(timeoutSeconds));
             if (periodicField != null) periodicField.setText(String.valueOf(periodicSeconds));
+            if (timeRangeEnabledCheckBox != null) timeRangeEnabledCheckBox.setSelected(timeRangeEnabled);
+            if (startTimeField != null) startTimeField.setText(startTime);
+            if (endTimeField != null) endTimeField.setText(endTime);
+            if (dayCheckBoxes != null) {
+                for (int i = 0; i < dayCheckBoxes.length; i++) {
+                    dayCheckBoxes[i].setSelected(activeDays.contains(DayOfWeek.of(i + 1)));
+                }
+            }
             
             System.out.println("✅ Configuration loaded from: " + configFile.getAbsolutePath());
             System.out.println("Bot: " + botToken.substring(0, Math.min(10, botToken.length())) + "...");
             System.out.println("Chat ID: " + chatId);
             System.out.println("Timeout: " + timeoutSeconds + " seconds");
             System.out.println("Periodic: " + periodicSeconds + " seconds");
+            System.out.println("Time Range: " + (timeRangeEnabled ? "Enabled" : "Disabled") + 
+                              (timeRangeEnabled ? " (" + startTime + " - " + endTime + ")" : ""));
+            System.out.println("Active Days: " + activeDays);
             
-            // Update status display if UI is already created
+            // Update status displays if UI is already created
             updateStatus();
+            updateTimeRangeStatus();
         } catch (IOException | NumberFormatException e) {
             System.err.println("❌ Error loading configuration: " + e.getMessage());
         }
@@ -424,6 +746,19 @@ public class SimpleTelegramNotifier implements
     
     public void testTelegram() {
         sendMessage("🧪 Test message from Simple Telegram Notifier");
+    }
+    
+    public boolean isTimeRangeActive() {
+        return timeRangeEnabled && isInTimeRange;
+    }
+    
+    public String getTimeRangeStatus() {
+        if (!timeRangeEnabled) {
+            return "Time Range: Disabled";
+        }
+        return isInTimeRange ? 
+            "Time Range: IN RANGE (" + startTime + " - " + endTime + ")" :
+            "Time Range: OUT OF RANGE (" + startTime + " - " + endTime + ")";
     }
     
     public void sendMessage(String message) {
@@ -461,6 +796,13 @@ public class SimpleTelegramNotifier implements
     @Override
     public void finish() {
         stopMonitoring();
+        
+        // Cancel time range task
+        if (timeRangeTask != null && !timeRangeTask.isCancelled()) {
+            timeRangeTask.cancel(false);
+            timeRangeTask = null;
+        }
+        
         if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdown();
             try {
