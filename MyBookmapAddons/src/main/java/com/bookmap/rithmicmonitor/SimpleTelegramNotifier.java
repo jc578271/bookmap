@@ -29,9 +29,6 @@ import java.time.DayOfWeek;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
 @Layer1Attachable
 @Layer1StrategyName("Simple Telegram Notifier")
@@ -58,12 +55,10 @@ public class SimpleTelegramNotifier implements
     private java.util.concurrent.ScheduledFuture<?> periodicTask;
     
     // Time range configuration
+    private DayOfWeek startDayOfWeek = DayOfWeek.MONDAY;
+    private DayOfWeek endDayOfWeek = DayOfWeek.FRIDAY;
     private String startTime = "09:00";
     private String endTime = "17:00";
-    private Set<DayOfWeek> activeDays = new HashSet<>(Arrays.asList(
-        DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, 
-        DayOfWeek.THURSDAY, DayOfWeek.FRIDAY
-    ));
     private boolean timeRangeEnabled = false;
     private boolean isInTimeRange = false;
     private java.util.concurrent.ScheduledFuture<?> timeRangeTask;
@@ -74,8 +69,9 @@ public class SimpleTelegramNotifier implements
     private JTextField periodicField;
     private JTextField startTimeField;
     private JTextField endTimeField;
+    private JComboBox<String> startDayComboBox;
+    private JComboBox<String> endDayComboBox;
     private JCheckBox timeRangeEnabledCheckBox;
-    private JCheckBox[] dayCheckBoxes;
     private JLabel statusLabel;
     private JLabel timeRangeStatusLabel;
     private final File configFile;
@@ -213,32 +209,40 @@ public class SimpleTelegramNotifier implements
             return;
         }
         
-        LocalDateTime now = LocalDateTime.now();
-        DayOfWeek currentDay = now.getDayOfWeek();
-        LocalTime currentTime = now.toLocalTime();
-        
-        // Check if current day is active
-        if (!activeDays.contains(currentDay)) {
-            isInTimeRange = false;
-            updateTimeRangeStatus();
-            return;
-        }
-        
-        // Parse start and end times
         try {
-            LocalTime start = LocalTime.parse(startTime, DateTimeFormatter.ofPattern("HH:mm"));
-            LocalTime end = LocalTime.parse(endTime, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalDateTime now = LocalDateTime.now();
             
+            // 1. Get timestamp of Monday 00:00 of current week
+            LocalDateTime mondayOfCurrentWeek = now.with(DayOfWeek.MONDAY).with(LocalTime.of(0, 0));
+            
+            // 2. Calculate start timestamp (Monday 00:00 + start day offset + start time)
+            int startDayOffset = startDayOfWeek.getValue() - 1; // Monday=0, Tuesday=1, etc.
+            LocalTime startTimeParsed = LocalTime.parse(startTime, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalDateTime startTimestamp = mondayOfCurrentWeek.plusDays(startDayOffset).with(startTimeParsed);
+            
+            // 3. Calculate end timestamp (Monday 00:00 + end day offset + end time)
+            int endDayOffset = endDayOfWeek.getValue() - 1; // Monday=0, Tuesday=1, etc.
+            LocalTime endTimeParsed = LocalTime.parse(endTime, DateTimeFormatter.ofPattern("HH:mm"));
+            LocalDateTime endTimestamp = mondayOfCurrentWeek.plusDays(endDayOffset).with(endTimeParsed);
+            
+            // 4. Check if current timestamp is between start and end timestamps
             boolean wasInRange = isInTimeRange;
-            isInTimeRange = !currentTime.isBefore(start) && !currentTime.isAfter(end);
+            isInTimeRange = !now.isBefore(startTimestamp) && !now.isAfter(endTimestamp);
+            
+            // Debug output
+            System.out.println("🔍 DEBUG: Current: " + now);
+            System.out.println("🔍 DEBUG: Monday of week: " + mondayOfCurrentWeek);
+            System.out.println("🔍 DEBUG: Start timestamp: " + startTimestamp + " (Day: " + startDayOfWeek + ", Time: " + startTime + ")");
+            System.out.println("🔍 DEBUG: End timestamp: " + endTimestamp + " (Day: " + endDayOfWeek + ", Time: " + endTime + ")");
+            System.out.println("🔍 DEBUG: In range: " + isInTimeRange);
             
             // Update status if it changed
             if (wasInRange != isInTimeRange) {
                 updateTimeRangeStatus();
                 if (isInTimeRange) {
-                    System.out.println("✅ Entered time range: " + startTime + " - " + endTime + " on " + currentDay);
+                    System.out.println("✅ Entered time range: " + startTimestamp + " to " + endTimestamp);
                 } else {
-                    System.out.println("❌ Exited time range: " + startTime + " - " + endTime + " on " + currentDay);
+                    System.out.println("❌ Exited time range: " + startTimestamp + " to " + endTimestamp);
                 }
             }
         } catch (DateTimeParseException e) {
@@ -309,7 +313,7 @@ public class SimpleTelegramNotifier implements
                 // First timeout alert
                 timeoutStartTime = System.currentTimeMillis();
                 System.out.println("🔴 First timeout triggered after " + timeoutSeconds + " seconds");
-                sendMessage("⚠️ No connection after " + timeoutSeconds + " seconds");
+                sendMessage("No connection after " + timeoutSeconds + " seconds");
                 isInTimeoutState = true;
                 
                 // Start periodic alerts if configured
@@ -345,7 +349,7 @@ public class SimpleTelegramNotifier implements
             long totalSeconds = timeoutSeconds + (periodicIntervalsPassed * periodicSeconds);
             
             System.out.println("📡 Periodic alert: " + totalSeconds + " seconds total");
-            sendMessage("⚠️ No connection after " + totalSeconds + " seconds");
+            sendMessage("No connection after " + totalSeconds + " seconds");
         } else {
             // Data has returned, stop periodic alerts
             System.out.println("✅ Data returned, stopping periodic alerts");
@@ -425,17 +429,39 @@ public class SimpleTelegramNotifier implements
         });
         panel.add(timeRangeEnabledCheckBox, gbc);
         
-        // Start Time
-        gbc.gridx = 0; gbc.gridy = 5;
-        gbc.gridwidth = 1;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel("Start Time (HH:mm):"), gbc);
+        // Time Range Settings - Separate Panel with GridLayout
+        JPanel timeRangePanel = new JPanel(new GridLayout(3, 2, 10, 5));
+        timeRangePanel.setBorder(BorderFactory.createTitledBorder("Time Range Settings"));
         
-        gbc.gridx = 1; gbc.gridy = 5;
-        gbc.gridwidth = 1;
-        gbc.weightx = 1.0;
+        String[] daysOfWeek = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+        
+        // Column Headers
+        timeRangePanel.add(new JLabel("Start Time:", SwingConstants.CENTER));
+        timeRangePanel.add(new JLabel("End Time:", SwingConstants.CENTER));
+        
+        // Start Day
+        startDayComboBox = new JComboBox<>(daysOfWeek);
+        startDayComboBox.setSelectedIndex(startDayOfWeek.getValue() - 1);
+        startDayComboBox.addActionListener(e -> {
+            startDayOfWeek = DayOfWeek.of(startDayComboBox.getSelectedIndex() + 1);
+            checkTimeRange();
+            updateTimeRangeStatus();
+        });
+        timeRangePanel.add(startDayComboBox);
+        
+        // End Day
+        endDayComboBox = new JComboBox<>(daysOfWeek);
+        endDayComboBox.setSelectedIndex(endDayOfWeek.getValue() - 1);
+        endDayComboBox.addActionListener(e -> {
+            endDayOfWeek = DayOfWeek.of(endDayComboBox.getSelectedIndex() + 1);
+            checkTimeRange();
+            updateTimeRangeStatus();
+        });
+        timeRangePanel.add(endDayComboBox);
+        
+        // Start Time
         startTimeField = new JTextField(startTime, 8);
-        startTimeField.setToolTipText("Enter time in HH:mm format (e.g., 09:30)");
+        startTimeField.setToolTipText("Enter start time in HH:mm format (e.g., 09:30)");
         startTimeField.addActionListener(e -> {
             updateStartTime();
         });
@@ -445,19 +471,11 @@ public class SimpleTelegramNotifier implements
                 updateStartTime();
             }
         });
-        panel.add(startTimeField, gbc);
+        timeRangePanel.add(startTimeField);
         
         // End Time
-        gbc.gridx = 0; gbc.gridy = 6;
-        gbc.gridwidth = 1;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel("End Time (HH:mm):"), gbc);
-        
-        gbc.gridx = 1; gbc.gridy = 6;
-        gbc.gridwidth = 1;
-        gbc.weightx = 1.0;
         endTimeField = new JTextField(endTime, 8);
-        endTimeField.setToolTipText("Enter time in HH:mm format (e.g., 17:30)");
+        endTimeField.setToolTipText("Enter end time in HH:mm format (e.g., 17:30)");
         endTimeField.addActionListener(e -> {
             updateEndTime();
         });
@@ -467,48 +485,17 @@ public class SimpleTelegramNotifier implements
                 updateEndTime();
             }
         });
-        panel.add(endTimeField, gbc);
+        timeRangePanel.add(endTimeField);
         
-        gbc.gridx = 0; gbc.gridy = 7;
+        // Add the time range panel to the main panel
+        gbc.gridx = 0; gbc.gridy = 5;
         gbc.gridwidth = 2;
-        gbc.weightx = 0.0;
-        panel.add(new JLabel("Active Days:"), gbc);
-        
-        // Create a panel for day checkboxes with 2 columns
-        JPanel daysPanel = new JPanel(new GridLayout(0, 2, 5, 2));
-        daysPanel.setBorder(BorderFactory.createEmptyBorder(2, 10, 2, 10));
-        
-        dayCheckBoxes = new JCheckBox[7];
-        dayCheckBoxes[0] = new JCheckBox("Monday");
-        dayCheckBoxes[1] = new JCheckBox("Tuesday");
-        dayCheckBoxes[2] = new JCheckBox("Wednesday");
-        dayCheckBoxes[3] = new JCheckBox("Thursday");
-        dayCheckBoxes[4] = new JCheckBox("Friday");
-        dayCheckBoxes[5] = new JCheckBox("Saturday");
-        dayCheckBoxes[6] = new JCheckBox("Sunday");
-        
-        for (int i = 0; i < dayCheckBoxes.length; i++) {
-            final int dayIndex = i;
-            dayCheckBoxes[i].setSelected(activeDays.contains(DayOfWeek.of(i + 1)));
-            dayCheckBoxes[i].addActionListener(e -> {
-                if (dayCheckBoxes[dayIndex].isSelected()) {
-                    activeDays.add(DayOfWeek.of(dayIndex + 1));
-                } else {
-                    activeDays.remove(DayOfWeek.of(dayIndex + 1));
-                }
-                checkTimeRange();
-                updateTimeRangeStatus();
-            });
-            daysPanel.add(dayCheckBoxes[i]);
-        }
-        
-        gbc.gridx = 0; gbc.gridy = 8;
-        gbc.gridwidth = 2;
-        gbc.weightx = 0.0;
-        panel.add(daysPanel, gbc);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(timeRangePanel, gbc);
         
         // Status Display
-        gbc.gridx = 0; gbc.gridy = 9;
+        gbc.gridx = 0; gbc.gridy = 10;
         gbc.gridwidth = 2;
         gbc.weightx = 0.0;
         statusLabel = new JLabel("Status: Not Monitoring", SwingConstants.CENTER);
@@ -517,7 +504,7 @@ public class SimpleTelegramNotifier implements
         panel.add(statusLabel, gbc);
         
         // Time Range Status Display
-        gbc.gridx = 0; gbc.gridy = 10;
+        gbc.gridx = 0; gbc.gridy = 11;
         gbc.gridwidth = 2;
         gbc.weightx = 0.0;
         timeRangeStatusLabel = new JLabel("Time Range Status: Not Active", SwingConstants.CENTER);
@@ -567,7 +554,7 @@ public class SimpleTelegramNotifier implements
         });
         buttonPanel.add(stopButton);
         
-        gbc.gridx = 0; gbc.gridy = 11;
+        gbc.gridx = 0; gbc.gridy = 12;
         gbc.gridwidth = 2;
         gbc.weightx = 0.0;
         panel.add(buttonPanel, gbc);
@@ -631,12 +618,12 @@ public class SimpleTelegramNotifier implements
             System.out.println("⚠️ Invalid time format, reset to default: " + startTime + " - " + endTime);
         }
         
-        // Save active days
-        activeDays.clear();
-        for (int i = 0; i < dayCheckBoxes.length; i++) {
-            if (dayCheckBoxes[i].isSelected()) {
-                activeDays.add(DayOfWeek.of(i + 1));
-            }
+        // Save day of week settings
+        if (startDayComboBox != null) {
+            startDayOfWeek = DayOfWeek.of(startDayComboBox.getSelectedIndex() + 1);
+        }
+        if (endDayComboBox != null) {
+            endDayOfWeek = DayOfWeek.of(endDayComboBox.getSelectedIndex() + 1);
         }
         
         // Save to file
@@ -650,8 +637,8 @@ public class SimpleTelegramNotifier implements
         System.out.println("Timeout: " + timeoutSeconds + " seconds");
         System.out.println("Periodic: " + periodicSeconds + " seconds");
         System.out.println("Time Range: " + (timeRangeEnabled ? "Enabled" : "Disabled") + 
-                          (timeRangeEnabled ? " (" + startTime + " - " + endTime + ")" : ""));
-        System.out.println("Active Days: " + activeDays);
+                          (timeRangeEnabled ? " (" + startDayOfWeek + " to " + endDayOfWeek + 
+                           ", Time: " + startTime + " - " + endTime + ")" : ""));
     }
     
     private void saveConfigToFile() {
@@ -664,9 +651,8 @@ public class SimpleTelegramNotifier implements
             props.setProperty("timeRangeEnabled", String.valueOf(timeRangeEnabled));
             props.setProperty("startTime", startTime);
             props.setProperty("endTime", endTime);
-            props.setProperty("activeDays", String.join(",", activeDays.stream()
-                .map(day -> String.valueOf(day.getValue()))
-                .toArray(String[]::new)));
+            props.setProperty("startDayOfWeek", String.valueOf(startDayOfWeek.getValue()));
+            props.setProperty("endDayOfWeek", String.valueOf(endDayOfWeek.getValue()));
             
             try (FileWriter writer = new FileWriter(configFile)) {
                 props.store(writer, "Simple Telegram Notifier Configuration");
@@ -698,20 +684,8 @@ public class SimpleTelegramNotifier implements
             timeRangeEnabled = Boolean.parseBoolean(props.getProperty("timeRangeEnabled", "false"));
             startTime = props.getProperty("startTime", "09:00");
             endTime = props.getProperty("endTime", "17:00");
-            
-            // Load active days
-            String activeDaysStr = props.getProperty("activeDays", "1,2,3,4,5"); // Monday-Friday by default
-            activeDays.clear();
-            for (String dayStr : activeDaysStr.split(",")) {
-                try {
-                    int dayValue = Integer.parseInt(dayStr.trim());
-                    if (dayValue >= 1 && dayValue <= 7) {
-                        activeDays.add(DayOfWeek.of(dayValue));
-                    }
-                } catch (NumberFormatException e) {
-                    // Skip invalid day values
-                }
-            }
+            startDayOfWeek = DayOfWeek.of(Integer.parseInt(props.getProperty("startDayOfWeek", "1")));
+            endDayOfWeek = DayOfWeek.of(Integer.parseInt(props.getProperty("endDayOfWeek", "5")));
             
             // Update UI fields if they exist
             if (botTokenField != null) botTokenField.setText(botToken);
@@ -721,10 +695,11 @@ public class SimpleTelegramNotifier implements
             if (timeRangeEnabledCheckBox != null) timeRangeEnabledCheckBox.setSelected(timeRangeEnabled);
             if (startTimeField != null) startTimeField.setText(startTime);
             if (endTimeField != null) endTimeField.setText(endTime);
-            if (dayCheckBoxes != null) {
-                for (int i = 0; i < dayCheckBoxes.length; i++) {
-                    dayCheckBoxes[i].setSelected(activeDays.contains(DayOfWeek.of(i + 1)));
-                }
+            if (startDayComboBox != null) {
+                startDayComboBox.setSelectedIndex(startDayOfWeek.getValue() - 1);
+            }
+            if (endDayComboBox != null) {
+                endDayComboBox.setSelectedIndex(endDayOfWeek.getValue() - 1);
             }
             
             System.out.println("✅ Configuration loaded from: " + configFile.getAbsolutePath());
@@ -733,8 +708,8 @@ public class SimpleTelegramNotifier implements
             System.out.println("Timeout: " + timeoutSeconds + " seconds");
             System.out.println("Periodic: " + periodicSeconds + " seconds");
             System.out.println("Time Range: " + (timeRangeEnabled ? "Enabled" : "Disabled") + 
-                              (timeRangeEnabled ? " (" + startTime + " - " + endTime + ")" : ""));
-            System.out.println("Active Days: " + activeDays);
+                              (timeRangeEnabled ? " (" + startDayOfWeek + " to " + endDayOfWeek + 
+                               ", Time: " + startTime + " - " + endTime + ")" : ""));
             
             // Update status displays if UI is already created
             updateStatus();
@@ -745,7 +720,7 @@ public class SimpleTelegramNotifier implements
     }
     
     public void testTelegram() {
-        sendMessage("🧪 Test message from Simple Telegram Notifier");
+        sendMessage("Test message from Simple Telegram Notifier");
     }
     
     public boolean isTimeRangeActive() {
@@ -757,8 +732,10 @@ public class SimpleTelegramNotifier implements
             return "Time Range: Disabled";
         }
         return isInTimeRange ? 
-            "Time Range: IN RANGE (" + startTime + " - " + endTime + ")" :
-            "Time Range: OUT OF RANGE (" + startTime + " - " + endTime + ")";
+            "Time Range: IN RANGE (" + startDayOfWeek + " to " + endDayOfWeek + 
+            ", Time: " + startTime + " - " + endTime + ")" :
+            "Time Range: OUT OF RANGE (" + startDayOfWeek + " to " + endDayOfWeek + 
+            ", Time: " + startTime + " - " + endTime + ")";
     }
     
     public void sendMessage(String message) {
